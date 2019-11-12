@@ -3,7 +3,6 @@
 Display bluetooth status.
 
 Configuration parameters:
-    cache_timeout: refresh interval for this module (default 10)
     format: display format for this module (default "{format_adapter}")
     format_adapter: display format for adapters (default "{format_device}")
     format_adapter_separator: show separator if more than one (default " ")
@@ -54,7 +53,7 @@ Color thresholds:
     xxx: print a color based on the value of `xxx` placeholder
 
 Requires:
-    pydbus: pythonic dbus library
+    python-gobject: Python Bindings for GLib/GObject/GIO/GTK+
 
 Examples:
 ```
@@ -83,7 +82,8 @@ SAMPLE OUTPUT
 {'color': '#00FF00', 'full_text': u'Microsoft Bluetooth Notebook Mouse 5000'}
 """
 
-from pydbus import SystemBus
+from gi.repository import GLib, Gio
+from threading import Thread
 
 
 class Py3status:
@@ -91,7 +91,6 @@ class Py3status:
     """
 
     # available configuration parameters
-    cache_timeout = 10
     format = "{format_adapter}"
     format_adapter = "{format_device}"
     format_adapter_separator = " "
@@ -100,9 +99,20 @@ class Py3status:
     thresholds = [(False, "bad"), (True, "good")]
 
     def post_config_hook(self):
-        self.bluez_manager = SystemBus().get("org.bluez", "/")[
-            "org.freedesktop.DBus.ObjectManager"
-        ]
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        iface = "org.freedesktop.DBus.ObjectManager"
+        self.bluez_manager = Gio.DBusProxy.new_sync(
+            bus, Gio.DBusProxyFlags.NONE, None, "org.bluez", "/", iface, None
+        )
+        for signal in ["InterfacesAdded", "InterfacesRemoved"]:
+            bus.signal_subscribe(
+                None, iface, signal, None, None, 0, lambda *args: self.py3.update()
+            )
+
+        thread = Thread(target=lambda: GLib.MainLoop().run())
+        thread.daemon = True
+        thread.start()
+
         self.thresholds_init = {}
         for name in ["format", "format_adapter", "format_device"]:
             self.thresholds_init[name] = self.py3.get_color_names_list(
@@ -173,7 +183,7 @@ class Py3status:
                 self.py3.threshold_get_color(bluetooth_data[x], x)
 
         return {
-            "cached_until": self.py3.time_in(self.cache_timeout),
+            "cached_until": self.py3.time_in(self.py3.CACHE_FOREVER),
             "full_text": self.py3.safe_format(self.format, bluetooth_data),
         }
 
